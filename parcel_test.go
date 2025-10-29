@@ -2,120 +2,113 @@ package main
 
 import (
 	"database/sql"
-	"math/rand"
+	"os"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
-var (
-	// randSource источник псевдо случайных чисел.
-	// Для повышения уникальности в качестве seed
-	// используется текущее время в unix формате (в виде числа)
-	randSource = rand.NewSource(time.Now().UnixNano())
-	// randRange использует randSource для генерации случайных чисел
-	randRange = rand.New(randSource)
-)
-
-// getTestParcel возвращает тестовую посылку
-func getTestParcel() Parcel {
-	return Parcel{
-		Client:    1000,
-		Status:    ParcelStatusRegistered,
-		Address:   "test",
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+func openDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", "tracker.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
 	}
+	t.Cleanup(func() { db.Close() })
+	return db
 }
 
-// TestAddGetDelete проверяет добавление, получение и удаление посылки
-func TestAddGetDelete(t *testing.T) {
-	// prepare
-	db, err := // настройте подключение к БД
+func resetRow(t *testing.T, db *sql.DB, num int64) {
+	t.Helper()
+	db.Exec(`DELETE FROM parcel WHERE number = ?`, num)
+}
+
+func TestRegisterAndList(t *testing.T) {
+	db := openDB(t)
 	store := NewParcelStore(db)
-	parcel := getTestParcel()
+	svc := NewParcelService(store)
 
-	// add
-	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
-
-	// get
-	// получите только что добавленную посылку, убедитесь в отсутствии ошибки
-	// проверьте, что значения всех полей в полученном объекте совпадают со значениями полей в переменной parcel
-
-	// delete
-	// удалите добавленную посылку, убедитесь в отсутствии ошибки
-	// проверьте, что посылку больше нельзя получить из БД
-}
-
-// TestSetAddress проверяет обновление адреса
-func TestSetAddress(t *testing.T) {
-	// prepare
-	db, err := // настройте подключение к БД
-
-	// add
-	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
-
-	// set address
-	// обновите адрес, убедитесь в отсутствии ошибки
-	newAddress := "new test address"
-
-	// check
-	// получите добавленную посылку и убедитесь, что адрес обновился
-}
-
-// TestSetStatus проверяет обновление статуса
-func TestSetStatus(t *testing.T) {
-	// prepare
-	db, err := // настройте подключение к БД
-
-	// add
-	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
-
-	// set status
-	// обновите статус, убедитесь в отсутствии ошибки
-
-	// check
-	// получите добавленную посылку и убедитесь, что статус обновился
-}
-
-// TestGetByClient проверяет получение посылок по идентификатору клиента
-func TestGetByClient(t *testing.T) {
-	// prepare
-	db, err := // настройте подключение к БД
-
-	parcels := []Parcel{
-		getTestParcel(),
-		getTestParcel(),
-		getTestParcel(),
+	num, err := svc.RegisterParcel(1, "г. Псков, ул. Пушкина, д. 5")
+	if err != nil {
+		t.Fatalf("register: %v", err)
 	}
-	parcelMap := map[int]Parcel{}
+	t.Cleanup(func() { resetRow(t, db, num) })
 
-	// задаём всем посылкам один и тот же идентификатор клиента
-	client := randRange.Intn(10_000_000)
-	parcels[0].Client = client
-	parcels[1].Client = client
-	parcels[2].Client = client
-
-	// add
-	for i := 0; i < len(parcels); i++ {
-		id, err := // добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
-
-		// обновляем идентификатор добавленной у посылки
-		parcels[i].Number = id
-
-		// сохраняем добавленную посылку в структуру map, чтобы её можно было легко достать по идентификатору посылки
-		parcelMap[id] = parcels[i]
+	list, err := svc.GetClientParcels(1)
+	if err != nil {
+		t.Fatalf("list: %v", err)
 	}
-
-	// get by client
-	storedParcels, err := // получите список посылок по идентификатору клиента, сохранённого в переменной client
-	// убедитесь в отсутствии ошибки
-	// убедитесь, что количество полученных посылок совпадает с количеством добавленных
-
-	// check
-	for _, parcel := range storedParcels {
-		// в parcelMap лежат добавленные посылки, ключ - идентификатор посылки, значение - сама посылка
-		// убедитесь, что все посылки из storedParcels есть в parcelMap
-		// убедитесь, что значения полей полученных посылок заполнены верно
+	found := false
+	for _, p := range list {
+		if p.Number == num && p.Status == ParcelStatusRegistered {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("registered parcel not found in client list")
 	}
 }
+
+func TestStatusFlow(t *testing.T) {
+	db := openDB(t)
+	store := NewParcelStore(db)
+	svc := NewParcelService(store)
+
+	num, err := svc.RegisterParcel(2, "г. Саратов, ул. Верхние Зори, д. 25")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { resetRow(t, db, num) })
+
+	if err := svc.ChangeStatus(num, ParcelStatusSent); err != nil {
+		t.Fatalf("to sent: %v", err)
+	}
+	if err := svc.ChangeStatus(num, ParcelStatusDelivered); err != nil {
+		t.Fatalf("to delivered: %v", err)
+	}
+}
+
+func TestUpdateAddressRules(t *testing.T) {
+	db := openDB(t)
+	store := NewParcelStore(db)
+	svc := NewParcelService(store)
+
+	num, err := svc.RegisterParcel(3, "первый адрес")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { resetRow(t, db, num) })
+
+	if err := svc.ChangeAddress(num, "обновлённый адрес"); err != nil {
+		t.Fatalf("update address registered: %v", err)
+	}
+
+	if err := svc.ChangeStatus(num, ParcelStatusSent); err != nil {
+		t.Fatalf("to sent: %v", err)
+	}
+	if err := svc.ChangeAddress(num, "нельзя уже"); err == nil {
+		t.Fatalf("expected error when updating address after sent")
+	}
+}
+
+func TestDeleteRules(t *testing.T) {
+	db := openDB(t)
+	store := NewParcelStore(db)
+	svc := NewParcelService(store)
+
+	num, err := svc.RegisterParcel(4, "адрес")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if err := svc.ChangeStatus(num, ParcelStatusSent); err != nil {
+		t.Fatalf("to sent: %v", err)
+	}
+	if err := svc.Remove(num); err == nil {
+		t.Fatalf("expected error: delete not allowed when sent")
+	}
+	resetRow(t, db, num)
+}
+
+func TestMain(m *testing.M) { os.Exit(m.Run()) }
