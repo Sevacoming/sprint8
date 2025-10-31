@@ -1,0 +1,5 @@
+tracker.db
+*.exe
+*.out
+*.log
+.DS_Store

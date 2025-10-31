@@ -8,9 +8,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func openDB(t *testing.T) *sql.DB {
+// helper для тестов: использует openDB() из main.go и возвращает только *sql.DB
+func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "tracker.db")
+	db, err := openDB()
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -24,7 +25,7 @@ func resetRow(t *testing.T, db *sql.DB, num int64) {
 }
 
 func TestRegisterAndList(t *testing.T) {
-	db := openDB(t)
+	db := openTestDB(t)
 	store := NewParcelStore(db)
 	svc := NewParcelService(store)
 
@@ -51,7 +52,7 @@ func TestRegisterAndList(t *testing.T) {
 }
 
 func TestStatusFlow(t *testing.T) {
-	db := openDB(t)
+	db := openTestDB(t)
 	store := NewParcelStore(db)
 	svc := NewParcelService(store)
 
@@ -70,7 +71,7 @@ func TestStatusFlow(t *testing.T) {
 }
 
 func TestUpdateAddressRules(t *testing.T) {
-	db := openDB(t)
+	db := openTestDB(t)
 	store := NewParcelStore(db)
 	svc := NewParcelService(store)
 
@@ -93,7 +94,7 @@ func TestUpdateAddressRules(t *testing.T) {
 }
 
 func TestDeleteRules(t *testing.T) {
-	db := openDB(t)
+	db := openTestDB(t)
 	store := NewParcelStore(db)
 	svc := NewParcelService(store)
 

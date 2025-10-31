@@ -6,17 +6,14 @@ import (
 	"time"
 )
 
+/*************** Доменные константы ***************/
 const (
 	ParcelStatusRegistered = "registered"
 	ParcelStatusSent       = "sent"
 	ParcelStatusDelivered  = "delivered"
 )
 
-var (
-	ErrNotAllowed = errors.New("operation not allowed in current status")
-	ErrNotFound   = errors.New("parcel not found")
-)
-
+/*************** Модель ***************/
 type Parcel struct {
 	Number    int64
 	Client    int64
@@ -25,40 +22,49 @@ type Parcel struct {
 	CreatedAt string
 }
 
-type ParcelStore struct{ db *sql.DB }
+/*************** Хранилище (SQL) ***************/
+type ParcelStore struct {
+	db *sql.DB
+}
 
-func NewParcelStore(db *sql.DB) *ParcelStore { return &ParcelStore{db: db} }
+func NewParcelStore(db *sql.DB) *ParcelStore {
+	return &ParcelStore{db: db}
+}
 
-// Add — регистрация новой посылки
 func (s *ParcelStore) Add(clientID int64, address string) (int64, error) {
-	const q = `INSERT INTO parcel (client, status, address, created_at)
-            VALUES (?, ?, ?, ?)`
-	created := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.Exec(q, clientID, ParcelStatusRegistered, address, created)
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.Exec(
+		`INSERT INTO parcel (client, status, address, created_at)
+         VALUES (:client, :status, :address, :created_at)`,
+		sql.Named("client", clientID),
+		sql.Named("status", ParcelStatusRegistered),
+		sql.Named("address", address),
+		sql.Named("created_at", now),
+	)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	return id, err
 }
 
-// Get — получить одну посылку по номеру
 func (s *ParcelStore) Get(number int64) (Parcel, error) {
-	const q = `SELECT number, client, status, address, created_at
-            FROM parcel WHERE number = ?`
 	var p Parcel
-	err := s.db.QueryRow(q, number).
-		Scan(&p.Number, &p.Client, &p.Status, &p.Address, &p.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Parcel{}, ErrNotFound
-	}
+	row := s.db.QueryRow(
+		`SELECT number, client, status, address, created_at
+         FROM parcel WHERE number = :number`,
+		sql.Named("number", number),
+	)
+	err := row.Scan(&p.Number, &p.Client, &p.Status, &p.Address, &p.CreatedAt)
 	return p, err
 }
 
-// GetByClient — список посылок клиента
 func (s *ParcelStore) GetByClient(clientID int64) ([]Parcel, error) {
-	const q = `SELECT number, client, status, address, created_at
-            FROM parcel WHERE client = ? ORDER BY number`
-	rows, err := s.db.Query(q, clientID)
+	rows, err := s.db.Query(
+		`SELECT number, client, status, address, created_at
+         FROM parcel WHERE client = :client ORDER BY number`,
+		sql.Named("client", clientID),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -75,122 +81,92 @@ func (s *ParcelStore) GetByClient(clientID int64) ([]Parcel, error) {
 	return out, rows.Err()
 }
 
-// UpdateStatus — сменить статус
 func (s *ParcelStore) UpdateStatus(number int64, newStatus string) error {
-	switch newStatus {
-	case ParcelStatusRegistered, ParcelStatusSent, ParcelStatusDelivered:
-	default:
-		return errors.New("unknown status")
-	}
-	res, err := s.db.Exec(`UPDATE parcel SET status = ? WHERE number = ?`, newStatus, number)
-	if err != nil {
-		return err
-	}
-	aff, _ := res.RowsAffected()
-	if aff == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// UpUpUpUpdateAddress — изменить адрес (только когда registered)
-func (s *ParcelStore) UpUpUpUpdateAddress(number int64, newAddress string) error {
-	res, err := s.db.Exec(
-		`UPDATE parcel SET address = ? WHERE number = ? AND status = 'registered'`,
-		newAddress, number,
+	_, err := s.db.Exec(
+		`UPDATE parcel SET status = :status WHERE number = :number`,
+		sql.Named("status", newStatus),
+		sql.Named("number", number),
 	)
-	if err != nil {
-		return err
-	}
-	aff, _ := res.RowsAffected()
-	if aff == 0 {
-		var cnt int
-		_ = s.db.QueryRow(`SELECT COUNT(1) FROM parcel WHERE number = ?`, number).Scan(&cnt)
-		if cnt > 0 {
-			return ErrNotAllowed
-		}
-		return ErrNotFound
-	}
-	return nil
+	return err
 }
 
-// Delete — удалить (только когда registered)
+func (s *ParcelStore) UpdateAddress(number int64, newAddress string) error {
+	_, err := s.db.Exec(
+		`UPDATE parcel SET address = :address WHERE number = :number`,
+		sql.Named("address", newAddress),
+		sql.Named("number", number),
+	)
+	return err
+}
+
 func (s *ParcelStore) Delete(number int64) error {
-	res, err := s.db.Exec(`DELETE FROM parcel WHERE number = ? AND status = 'registered'`, number)
-	if err != nil {
-		return err
-	}
-	aff, _ := res.RowsAffected()
-	if aff == 0 {
-		var cnt int
-		_ = s.db.QueryRow(`SELECT COUNT(1) FROM parcel WHERE number = ?`, number).Scan(&cnt)
-		if cnt > 0 {
-			return ErrNotAllowed
-		}
-		return ErrNotFound
-	}
-	return nil
+	_, err := s.db.Exec(
+		`DELETE FROM parcel WHERE number = :number`,
+		sql.Named("number", number),
+	)
+	return err
 }
 
-// Сервисная обёртка
-type ParcelService struct{ store *ParcelStore }
+/*************** Сервис (бизнес-правила) ***************/
+type ParcelService struct {
+	store *ParcelStore
+}
 
-func NewParcelService(store *ParcelStore) *ParcelService { return &ParcelService{store: store} }
+func NewParcelService(store *ParcelStore) *ParcelService {
+	return &ParcelService{store: store}
+}
 
-// «Каноничные» имена
-func (s *ParcelService) Add(clientID int64, address string) (int64, error) {
+// Регистрация новой посылки
+func (s *ParcelService) RegisterParcel(clientID int64, address string) (int64, error) {
 	return s.store.Add(clientID, address)
 }
-func (s *ParcelService) Get(number int64) (Parcel, error) {
-	return s.store.Get(number)
+
+// Для совместимости с main.go
+func (s *ParcelService) Register(clientID int64, address string) (int64, error) {
+	return s.RegisterParcel(clientID, address)
 }
-func (s *ParcelService) GetByClient(clientID int64) ([]Parcel, error) {
+
+// Список посылок клиента
+func (s *ParcelService) GetClientParcels(clientID int64) ([]Parcel, error) {
 	return s.store.GetByClient(clientID)
 }
-func (s *ParcelService) UpdateStatus(number int64, newStatus string) error {
-	return s.store.UpdateStatus(number, newStatus)
-}
-func (s *ParcelService) UpUpUpUpdateAddress(number int64, newAddress string) error {
-	return s.store.UpUpUpUpdateAddress(number, newAddress)
-}
-func (s *ParcelService) Delete(number int64) error {
-	return s.store.Delete(number)
-}
 
-// Синонимы — чтобы не падали старые вызовы
-func (s *ParcelService) RegisterParcel(clientID int64, address string) (int64, error) {
-	return s.Add(clientID, address)
-}
-func (s *ParcelService) GetClientParcels(clientID int64) ([]Parcel, error) {
-	return s.GetByClient(clientID)
-}
+// Смена статуса с валидацией переходов
 func (s *ParcelService) ChangeStatus(number int64, newStatus string) error {
-	return s.UpdateStatus(number, newStatus)
-}
-func (s *ParcelService) Remove(number int64) error {
-	return s.Delete(number)
+	p, err := s.store.Get(number)
+	if err != nil {
+		return err
+	}
+	switch {
+	case p.Status == ParcelStatusRegistered && newStatus == ParcelStatusSent:
+		return s.store.UpdateStatus(number, newStatus)
+	case p.Status == ParcelStatusSent && newStatus == ParcelStatusDelivered:
+		return s.store.UpdateStatus(number, newStatus)
+	default:
+		return errors.New("status change not allowed")
+	}
 }
 
+// Смена адреса (только в registered)
 func (s *ParcelService) ChangeAddress(number int64, newAddress string) error {
+	p, err := s.store.Get(number)
+	if err != nil {
+		return err
+	}
+	if p.Status != ParcelStatusRegistered {
+		return errors.New("update address not allowed when not registered")
+	}
 	return s.store.UpdateAddress(number, newAddress)
 }
 
-func (ps *ParcelStore) UpdateAddress(number int64, newAddress string) error {
-	// Разрешаем менять адрес только у зарегистрированных посылок
-	res, err := ps.db.Exec(
-		`UPDATE parcel SET address = ? WHERE number = ? AND status = ?`,
-		newAddress, number, ParcelStatusRegistered,
-	)
+// Удаление (только в registered)
+func (s *ParcelService) Remove(number int64) error {
+	p, err := s.store.Get(number)
 	if err != nil {
 		return err
 	}
-	aff, err := res.RowsAffected()
-	if err != nil {
-		return err
+	if p.Status != ParcelStatusRegistered {
+		return errors.New("delete not allowed when not registered")
 	}
-	if aff == 0 {
-		// либо номер не найден, либо статус не "registered"
-		return errors.New("update not allowed")
-	}
-	return nil
+	return s.store.Delete(number)
 }
