@@ -1,5 +1,17 @@
+# База данных
 tracker.db
+*.sqlite*
+*.db
+
+# Go-бинарники/артефакты
 *.exe
 *.out
+
+# Логи
 *.log
+
+# Системные/IDE
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/

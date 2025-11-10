@@ -23,7 +23,7 @@ func main() {
 	}
 	defer db.Close()
 
-	store := NewParcelStore(db)        // объект хранилища
+	store := NewParcelStore(db)
 	service := NewParcelService(store) // сервис
 
 	// маленькая демонстрация: зарегистрируем посылку
