@@ -2,113 +2,173 @@ package main
 
 import (
 	"database/sql"
-	"os"
+	"math/rand"
 	"testing"
+	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func openDB(t *testing.T) *sql.DB {
-	t.Helper()
+var (
+	// randSource источник псевдо случайных чисел.
+	// Для повышения уникальности в качестве seed
+	// используется текущее время в unix формате (в виде числа)
+	randSource = rand.NewSource(time.Now().UnixNano())
+	// randRange использует randSource для генерации случайных чисел
+	randRange = rand.New(randSource)
+)
+
+// getTestParcel возвращает тестовую посылку
+func getTestParcel() Parcel {
+	return Parcel{
+		Client:    1000,
+		Status:    ParcelStatusRegistered,
+		Address:   "test",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// TestAddGetDelete проверяет добавление, получение и удаление посылки
+func TestAddGetDelete(t *testing.T) {
+	// prepare
 	db, err := sql.Open("sqlite", "tracker.db")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
+	require.NoError(t, err)
+	defer db.Close()
 
-func resetRow(t *testing.T, db *sql.DB, num int64) {
-	t.Helper()
-	db.Exec(`DELETE FROM parcel WHERE number = ?`, num)
-}
-
-func TestRegisterAndList(t *testing.T) {
-	db := openDB(t)
 	store := NewParcelStore(db)
-	svc := NewParcelService(store)
+	parcel := getTestParcel()
 
-	num, err := svc.RegisterParcel(1, "г. Псков, ул. Пушкина, д. 5")
-	if err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	t.Cleanup(func() { resetRow(t, db, num) })
+	// add
+	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
+	id, err := store.Add(parcel)
+	require.NoError(t, err)
+	require.NotEqual(t, 0, id)
 
-	list, err := svc.GetClientParcels(1)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	found := false
-	for _, p := range list {
-		if p.Number == num && p.Status == ParcelStatusRegistered {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("registered parcel not found in client list")
-	}
+	// get
+	// получите только что добавленную посылку, убедитесь в отсутствии ошибки
+	// проверьте, что значения всех полей в полученном объекте совпадают со значениями полей в переменной parcel
+	parcelTest, err := store.Get(id)
+	require.NoError(t, err)
+	parcel.Number = id
+	assert.Equal(t, parcel, parcelTest)
+
+	// delete
+	// удалите добавленную посылку, убедитесь в отсутствии ошибки
+	// проверьте, что посылку больше нельзя получить из БД
+	err = store.Delete(id)
+	require.NoError(t, err)
+
+	_, err = store.Get(id)
+	require.Error(t, err)
 }
 
-func TestStatusFlow(t *testing.T) {
-	db := openDB(t)
+// TestSetAddress проверяет обновление адреса
+func TestSetAddress(t *testing.T) {
+	// prepare
+	db, err := sql.Open("sqlite", "tracker.db")
+	require.NoError(t, err)
+	defer db.Close()
+
 	store := NewParcelStore(db)
-	svc := NewParcelService(store)
+	parcel := getTestParcel()
 
-	num, err := svc.RegisterParcel(2, "г. Саратов, ул. Верхние Зори, д. 25")
-	if err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	t.Cleanup(func() { resetRow(t, db, num) })
+	// add
+	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
+	id, err := store.Add(parcel)
+	require.NoError(t, err)
+	require.NotEqual(t, 0, id)
 
-	if err := svc.ChangeStatus(num, ParcelStatusSent); err != nil {
-		t.Fatalf("to sent: %v", err)
-	}
-	if err := svc.ChangeStatus(num, ParcelStatusDelivered); err != nil {
-		t.Fatalf("to delivered: %v", err)
-	}
+	// set address
+	// обновите адрес, убедитесь в отсутствии ошибки
+	newAddress := "new test address"
+	err = store.SetAddress(id, newAddress)
+	require.NoError(t, err)
+
+	// check
+	// получите добавленную посылку и убедитесь, что адрес обновился
+	parcelTest, err := store.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, newAddress, parcelTest.Address)
 }
 
-func TestUpdateAddressRules(t *testing.T) {
-	db := openDB(t)
+// TestSetStatus проверяет обновление статуса
+func TestSetStatus(t *testing.T) {
+	// prepare
+	db, err := sql.Open("sqlite", "tracker.db")
+	require.NoError(t, err)
+	defer db.Close()
+
 	store := NewParcelStore(db)
-	svc := NewParcelService(store)
+	parcel := getTestParcel()
 
-	num, err := svc.RegisterParcel(3, "первый адрес")
-	if err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	t.Cleanup(func() { resetRow(t, db, num) })
+	// add
+	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
+	id, err := store.Add(parcel)
+	require.NoError(t, err)
+	require.NotEqual(t, 0, id)
 
-	if err := svc.ChangeAddress(num, "обновлённый адрес"); err != nil {
-		t.Fatalf("update address registered: %v", err)
-	}
+	// set status
+	// обновите статус, убедитесь в отсутствии ошибки
+	err = store.SetStatus(id, ParcelStatusDelivered)
+	require.NoError(t, err)
 
-	if err := svc.ChangeStatus(num, ParcelStatusSent); err != nil {
-		t.Fatalf("to sent: %v", err)
-	}
-	if err := svc.ChangeAddress(num, "нельзя уже"); err == nil {
-		t.Fatalf("expected error when updating address after sent")
-	}
+	// check
+	// получите добавленную посылку и убедитесь, что статус обновился
+	parcelTest, err := store.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, ParcelStatusDelivered, parcelTest.Status)
 }
 
-func TestDeleteRules(t *testing.T) {
-	db := openDB(t)
+// TestGetByClient проверяет получение посылок по идентификатору клиента
+func TestGetByClient(t *testing.T) {
+	// prepare
+	db, err := sql.Open("sqlite", "tracker.db")
+	require.NoError(t, err)
+	defer db.Close()
+
 	store := NewParcelStore(db)
-	svc := NewParcelService(store)
 
-	num, err := svc.RegisterParcel(4, "адрес")
-	if err != nil {
-		t.Fatalf("register: %v", err)
+	parcels := []Parcel{
+		getTestParcel(),
+		getTestParcel(),
+		getTestParcel(),
+	}
+	parcelMap := map[int]Parcel{}
+
+	// задаём всем посылкам один и тот же идентификатор клиента
+	client := randRange.Intn(10_000_000)
+	parcels[0].Client = client
+	parcels[1].Client = client
+	parcels[2].Client = client
+
+	// add
+	for i := 0; i < len(parcels); i++ {
+		// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
+		id, err := store.Add(parcels[i])
+		require.NoError(t, err)
+		require.NotEqual(t, 0, id)
+
+		// обновляем идентификатор добавленной посылки
+		parcels[i].Number = id
+
+		// сохраняем добавленную посылку в структуру map, чтобы её можно было легко достать по идентификатору посылки
+		parcelMap[id] = parcels[i]
 	}
 
-	if err := svc.ChangeStatus(num, ParcelStatusSent); err != nil {
-		t.Fatalf("to sent: %v", err)
+	// get by client
+	// получите список посылок по идентификатору клиента, сохранённого в переменной client
+	storedParcels, err := store.GetByClient(client)
+	// убедитесь в отсутствии ошибки
+	require.NoError(t, err)
+	// убедитесь, что количество полученных посылок совпадает с количеством добавленных
+	assert.Len(t, storedParcels, len(parcels))
+
+	// check
+	for _, parcel := range storedParcels {
+		// в parcelMap лежат добавленные посылки, ключ - идентификатор посылки, значение - сама посылка
+		// убедитесь, что все посылки из storedParcels есть в parcelMap
+		// убедитесь, что значения полей полученных посылок заполнены верно
+		assert.Equal(t, parcel, parcelMap[parcel.Number])
 	}
-	if err := svc.Remove(num); err == nil {
-		t.Fatalf("expected error: delete not allowed when sent")
-	}
-	resetRow(t, db, num)
 }
-
-func TestMain(m *testing.M) { os.Exit(m.Run()) }
